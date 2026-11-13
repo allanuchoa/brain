@@ -1,0 +1,8 @@
+node_modules/
+package-lock.json
+supabase/.temp/
+.claude/
+.playwright-mcp/
+*.pdf
+*.env
+.env
