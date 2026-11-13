@@ -21,6 +21,7 @@ async function api(body, tries = 12) {
     const r = await fetch(`${URL_}/functions/v1/brain`, { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     if (r.ok) return j;
+    if (/diária/.test(j.error || '')) { console.log(' PAROU: ' + j.error); process.exit(2); }   // cota do dia: não adianta insistir
     if (i >= tries || r.status < 500 && r.status !== 429) throw new Error(`${body.action}: ${r.status} ${j.error || ''}`);
     process.stdout.write(r.status === 429 ? ' (cota, 65s) ' : ` (${r.status}, 65s) `); await sleep(65000);
   }

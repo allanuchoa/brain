@@ -82,3 +82,10 @@ A carga é retomável: documento já indexado é pulado. A chave de serviço nun
 
 50 MB por arquivo, 1 GB de arquivos, 500 MB de banco. O acervo inicial (25 PDFs, 1.903 páginas) usa cerca de
 180 MB de arquivos.
+
+## Cota do Gemini
+
+No plano gratuito do Gemini, o modelo de embedding aceita 1.000 pedidos por dia, e cada trecho indexado conta
+como um pedido (cada pergunta conta mais um). O acervo inicial tem cerca de 4 mil trechos: no plano gratuito a
+carga leva vários dias; com faturamento ativado na chave, leva minutos e custa centavos. Quando a cota acaba,
+a busca continua funcionando só com a parte textual e avisa na tela; a carga em lote para e pode ser retomada.

@@ -38,7 +38,11 @@ async function gem(path: string, body: unknown, tries = 2, timeoutMs = 60000): P
   } catch (_e) { throw new Fail(504, "O Gemini demorou demais para responder."); }
   if ((r.status === 429 || r.status >= 500) && tries > 1) { await new Promise((s) => setTimeout(s, 2500)); return gem(path, body, tries - 1, timeoutMs); }
   const j = await r.json().catch(() => ({}));
-  if (r.status === 429) throw new Fail(429, "Limite por minuto da chave do Gemini atingido. Aguarde um minuto e tente de novo.");
+  if (r.status === 429) {
+    const daily = JSON.stringify(j?.error?.details ?? "").includes("PerDay");
+    throw new Fail(429, daily ? "Cota diária da chave do Gemini esgotada. Ela reabre no dia seguinte; o plano pago remove esse limite."
+      : "Limite por minuto da chave do Gemini atingido. Aguarde um minuto e tente de novo.");
+  }
   if (!r.ok) throw new Fail(502, `Gemini respondeu ${r.status}: ${String(j?.error?.message ?? "").slice(0, 200)}`);
   return j;
 }
@@ -110,9 +114,15 @@ async function retrieve(b: any, db: SupabaseClient) {
   }
   const lex = [lexQuery(q), lexQuery(extra.join(" ").replace(/["-]/g, " "))].filter(Boolean).join(" ");
   const needEmb = b.compare || mode !== "lexical";
-  const emb = needEmb ? JSON.stringify((await embed([standalone], "RETRIEVAL_QUERY"))[0]) : null;
+  // sem cota de embeddings a busca não para: segue só com a parte textual e avisa
+  let emb: string | null = null, notice = "";
+  if (needEmb) {
+    try { emb = JSON.stringify((await embed([standalone], "RETRIEVAL_QUERY"))[0]); }
+    catch (e) { if (!(e instanceof Fail) || e.status !== 429 || mode === "semantic" && !b.compare) throw e; notice = "Busca semântica indisponível agora (" + e.message + ") Usando só a busca textual."; }
+  }
 
   const run = async (m: string, n: number): Promise<Row[]> => {
+    if (!emb && m !== "lexical") { if (m === "semantic") return []; m = "lexical"; }
     const { data, error } = await db.rpc("brain_search", { p_q: lex, p_emb: m === "lexical" ? null : emb, p_mode: m, p_k: n, p_w_sem: w, p_docs: docs, p_cand: 40 });
     if (error) throw new Fail(500, "Falha na busca: " + error.message);
     return (data ?? []) as Row[];
@@ -120,7 +130,7 @@ async function retrieve(b: any, db: SupabaseClient) {
 
   if (b.compare) {
     const [semantic, lexical, hybrid] = await Promise.all([run("semantic", k), run("lexical", k), run("hybrid", k)]);
-    return { standalone, lex, extra, lists: { semantic, lexical, hybrid }, results: hybrid };
+    return { standalone, lex, extra, notice, lists: { semantic, lexical, hybrid }, results: hybrid };
   }
   let results = await run(mode, b.rerank ? Math.max(k, 20) : k);
 
@@ -136,7 +146,7 @@ async function retrieve(b: any, db: SupabaseClient) {
     } catch (_e) { /* sem reordenação: mantém a ordem da fusão */ }
     results = results.slice(0, k);
   }
-  return { standalone, lex, extra, results };
+  return { standalone, lex, extra, notice, results };
 }
 
 const SYSTEM = "Você é o Brain, assistente técnico de engenharia do Allan. O acervo cobre energia, sistemas elétricos, armazenamento (BESS), " +
@@ -168,7 +178,7 @@ async function ask(b: any, db: SupabaseClient, save: boolean) {
       params: { mode: b.mode ?? "hybrid", k: b.k ?? 8, w_sem: b.w_sem ?? 0.5, rerank: !!b.rerank },
     });
   }
-  return { answer, sources: r.results, standalone: r.standalone, lex: r.lex, ms, model };
+  return { answer, sources: r.results, standalone: r.standalone, lex: r.lex, notice: r.notice, ms, model };
 }
 
 // ---------- indexação (admin) ----------

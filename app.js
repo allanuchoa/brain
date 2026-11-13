@@ -76,7 +76,7 @@
       const r = await api('ask', { q, history: S.conv.slice(-3), mode: 'hybrid', ...params() });
       const t = addTurn(q, r.answer, r.sources, r.lex);
       b.className = 'msg bot'; b.dataset.turn = t.i;
-      b.innerHTML = t.html + '<p class="meta">' + r.sources.length + ' trechos · ' + (r.ms / 1000).toFixed(1).replace('.', ',') + ' s' + (r.model ? ' · ' + esc(r.model) : '') +
+      b.innerHTML = t.html + '<p class="meta">' + r.sources.length + ' trechos · ' + (r.ms / 1000).toFixed(1).replace('.', ',') + ' s' + (r.model ? ' · ' + esc(r.model) : '') + (r.notice ? ' · ⚠ ' + esc(r.notice) : '') +
         (r.standalone && BR.norm(r.standalone) !== BR.norm(q) ? ' · entendi como: ' + esc(r.standalone) : '') + '</p>';
       S.conv.push({ q, a: r.answer }); showSources(t.i);
     } catch (e) { b.className = 'msg bot error'; b.textContent = 'Não consegui responder: ' + e.message; }
@@ -113,7 +113,7 @@
     try {
       const r = await api('search', { q, mode: cmp ? 'hybrid' : S.o.mode, compare: cmp, ...params(), rerank: cmp ? false : S.o.rerank });
       const ts = BR.terms(q + ' ' + (r.extra || []).join(' '));
-      $('#search-info').textContent = 'Consulta textual usada: ' + (r.lex || '(vazia)') + (r.standalone && BR.norm(r.standalone) !== BR.norm(q) ? ' · pergunta reescrita: ' + r.standalone : '');
+      $('#search-info').textContent = (r.notice ? '⚠ ' + r.notice + ' · ' : '') + 'Consulta textual usada: ' + (r.lex || '(vazia)') + (r.standalone && BR.norm(r.standalone) !== BR.norm(q) ? ' · pergunta reescrita: ' + r.standalone : '');
       box.innerHTML = cmp
         ? '<div class="cmp">' + [['semantic', 'Semântica', 'acha pelo significado'], ['lexical', 'Textual', 'acha pelo termo exato'], ['hybrid', 'Híbrida', 'funde as duas']].map(([k, t, d]) =>
             '<div><h3>' + t + '</h3><p class="hint">' + d + ' · ' + r.lists[k].length + ' trechos</p><div class="cards">' + cards(r.lists[k], ts) + '</div></div>').join('') + '</div>'
@@ -202,7 +202,7 @@
       for (let t = 1; ; t++) {   // a cota de embeddings do Gemini é por minuto: espera e repete
         say(label);
         try { await api('ingest_chunks', { doc_id: start.id, chunks: chunks.slice(i, i + 48) }); break; }
-        catch (e) { if (t >= 10 || !/Limite por minuto|Erro 5\d\d|demorou/.test(e.message)) throw e; say(label + ' (aguardando a cota do Gemini, 65 s)'); await new Promise(r => setTimeout(r, 65000)); }
+        catch (e) { if (t >= 10 || /diária/.test(e.message) || !/Limite por minuto|Erro 5\d\d|demorou/.test(e.message)) throw e; say(label + ' (aguardando a cota do Gemini, 65 s)'); await new Promise(r => setTimeout(r, 65000)); }
       }
       await new Promise(r => setTimeout(r, 5000));
     }
