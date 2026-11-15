@@ -34,6 +34,7 @@ for (let i = 0; i < 20; i++) assert.ok(ch.some(c => c.page === 1 && c.content.in
 assert.ok(BR.chunkPages([{ n: 1, text: (frase + ' ').repeat(60) }]).length >= 4);
 // hifenização de fim de linha é desfeita
 assert.ok(BR.chunkPages([{ n: 1, text: 'A degrada-\nção das baterias depende da temperatura e da profundidade de descarga.' }])[0].content.includes('degradação'));
+assert.ok(BR.chunkPages([{ n: 1, text: 'texto com nulo\0 no meio de uma frase longa o bastante para virar trecho.' }])[0].content.indexOf('\0') < 0, 'remove \\u0000');
 
 // termos, realce e recorte
 assert.deepStrictEqual(BR.terms('Qual o limite de DRC na "REN 1000"?'), ['ren 1000', 'limite', 'drc']);

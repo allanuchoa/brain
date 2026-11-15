@@ -1,5 +1,10 @@
 # Changelog - Allan's Brain
 
+## [2.0.1] - 2026-11-15
+### Corrigido
+- Indexação falhava com "unsupported Unicode escape sequence" em PDFs com caractere nulo; o fatiador agora o remove. (Autor: Agente de IA Claude Opus 5.5)
+- Reenvio de um arquivo já guardado no bucket falhava por RLS (sobrescrever exige policy de UPDATE); o envio não sobrescreve mais e aceita o arquivo existente, que tem o mesmo hash. (Autor: Agente de IA Claude Opus 5.5)
+
 ## [2.0.0] - 2026-11-13
 Reescrita completa da RAG, agora dentro do portal. A versão 1 (FastAPI, Pinecone, um vetor por documento) fica arquivada no repositório privado antigo.
 

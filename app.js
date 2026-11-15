@@ -191,8 +191,9 @@
     if (!chunks.length) throw new Error('nenhum texto extraído' + (ext === 'pdf' && !ocr ? ' (marque "Ler páginas digitalizadas")' : ''));
     const path = hash.slice(0, 16) + '.' + ext;
     say('enviando o arquivo original');
-    const up = await sb.storage.from(BUCKET).upload(path, file, { upsert: true, contentType: mime });
-    if (up.error) throw new Error('envio do arquivo: ' + up.error.message);
+    // o nome é o hash: se já existe, é o mesmo arquivo (sobrescrever exigiria policy de UPDATE no bucket)
+    const up = await sb.storage.from(BUCKET).upload(path, file, { upsert: false, contentType: mime });
+    if (up.error && !/already exists|duplicate/i.test(up.error.message)) throw new Error('envio do arquivo: ' + up.error.message);
     const title = file.name.replace(/\.[^.]+$/, '').replace(/[_+]+/g, ' ').trim();
     const start = await api('ingest_start', { title, file_name: file.name, storage_path: path, mime, category: $('#up-cat').value.trim() || null,
       pages: pages.length, blank_pages: blank, chars: pages.reduce((s, p) => s + p.text.length, 0), content_hash: hash });

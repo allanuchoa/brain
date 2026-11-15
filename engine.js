@@ -48,7 +48,8 @@
     const junk = repeated(pages), chunks = [];
     let heading = '';
     for (const p of pages) {
-      const lines = p.text.replace(/(\p{L})-\n(\p{Ll})/gu, '$1$2').split('\n').map(l => l.trim())
+      // \0 sai porque o Postgres recusa \u0000 em texto
+      const lines = p.text.replace(/\0/g, '').replace(/(\p{L})-\n(\p{Ll})/gu, '$1$2').split('\n').map(l => l.trim())
         .filter(l => l && !junk.has(norm(l).replace(/\d+/g, '#')) && !/^(p[aá]gina\s*)?\d{1,4}(\s*(de|\/|of)\s*\d{1,4})?$/i.test(l));
       // buf = linhas do trecho em montagem; as `carry` primeiras são sobreposição do trecho anterior
       let buf = [], carry = 0, len = 0, head = heading;
