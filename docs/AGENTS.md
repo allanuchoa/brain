@@ -35,6 +35,13 @@ Este arquivo registra só o que é específico daqui.
 - Título de seção (numerado, "Art. N", "CAPÍTULO", caixa alta) abre trecho novo e é guardado em `heading`.
 - Linha curta repetida no topo ou no pé de 40% das páginas é cabeçalho ou rodapé e sai.
 
+## Provedores extras
+
+- Tabela `brain_providers`, sem policy: só a função (service role) lê. A chave entra por `provider_save` e nunca volta ao navegador (só `key_hint`).
+- Só APIs compatíveis com `/chat/completions` da OpenAI. Imagem (`describe`) e embeddings ficam sempre no Gemini.
+- Ordem automática da resposta: provedores `first` → cadeia do Gemini → provedores `fallback`. Escolher um modelo na pergunta o põe na frente.
+- OpenCode Zen: base `https://opencode.ai/inference/openai/v1`; os modelos gratuitos dão 403 fora do OpenCode.
+
 ## Cuidados
 
 - Mudar a dimensão ou o modelo de embedding invalida todos os vetores: reindexe o acervo inteiro.

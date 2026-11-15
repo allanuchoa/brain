@@ -1,5 +1,14 @@
 # Changelog - Allan's Brain
 
+## [2.1.0] - 2026-11-15
+### Adicionado
+- Aba Modelos (só admin): provedores extras compatíveis com a API da OpenAI (NVIDIA, OpenCode Zen ou outro), com chave, modelo, uso (antes do Gemini, reserva ou só quando escolhido) e ordem. Botões para testar e listar modelos. A chave fica em `brain_providers`, lida só pela função; a tela mostra os 4 últimos caracteres. (Autor: Agente de IA Claude Opus 5.5)
+- Escolha do modelo da resposta em Perguntar; se ele falhar, os outros entram em sequência, com prazo total de 110 s. (Autor: Agente de IA Claude Opus 5.5)
+- Expansão e reordenação usam o primeiro provedor extra quando o Gemini falha. (Autor: Agente de IA Claude Opus 5.5)
+
+### Alterado
+- Layout responsivo: abas e botões cabem no celular, tabelas viram cartões abaixo de 640 px, campos com 16 px (sem zoom no iOS), alvos de toque de 40 px e altura do chat por `dvh`. (Autor: Agente de IA Claude Opus 5.5)
+
 ## [2.0.1] - 2026-11-15
 ### Corrigido
 - Indexação falhava com "unsupported Unicode escape sequence" em PDFs com caractere nulo; o fatiador agora o remove. (Autor: Agente de IA Claude Opus 5.5)

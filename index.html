@@ -23,13 +23,14 @@
       <button type="button" role="tab" data-tab="search" aria-selected="false">Buscar</button>
       <button type="button" role="tab" data-tab="docs" aria-selected="false">Acervo</button>
       <button type="button" role="tab" data-tab="eval" aria-selected="false">Avaliação</button>
+      <button type="button" role="tab" data-tab="cfg" aria-selected="false" id="tab-cfg-btn" hidden>Modelos</button>
     </nav>
   </header>
 
   <div id="banner" class="banner" role="alert" hidden></div>
 
   <!-- opções de busca, comuns a Perguntar e Buscar -->
-  <div id="opts" class="opts">
+  <div id="opts" class="opts" data-tab="ask">
     <details id="doc-filter" class="filter">
       <summary><span id="doc-filter-label">Todos os documentos</span></summary>
       <div class="filter-box">
@@ -39,6 +40,7 @@
     </details>
     <label class="chk" title="O modelo reescreve a pergunta e sugere termos em português e inglês para a busca textual"><input type="checkbox" data-o="expand"> Expandir a pergunta</label>
     <label class="chk" title="O modelo dá nota a cada trecho encontrado e reordena. Mais lento, costuma melhorar a resposta"><input type="checkbox" data-o="rerank"> Reordenar com IA</label>
+    <label id="model-wrap" hidden title="Modelo que escreve a resposta. Se ele falhar, os outros entram na ordem de reserva">Modelo <select class="inp" data-o="model" id="model-pick"><option value="">Automático</option><option value="gemini">Gemini</option></select></label>
     <label>Trechos <select class="inp" data-o="k"><option>5</option><option>8</option><option>12</option><option>20</option></select></label>
     <label class="weight" title="Quanto cada busca pesa na fusão">Textual <input type="range" data-o="w" min="0" max="1" step="0.05" aria-label="Peso da busca semântica na fusão"> Semântica <output id="w-out"></output></label>
   </div>
@@ -123,6 +125,20 @@
     </div>
     <div id="eval-summary" class="tiles"></div>
     <div class="tbl-wrap"><table class="tbl" id="eval-table"></table></div>
+  </section>
+
+  <!-- MODELOS (admin) -->
+  <section id="tab-cfg" class="tab" hidden>
+    <p class="hint">Provedores extras para escrever a resposta, com a sua chave de API. Servem qualquer serviço compatível com a API da OpenAI (<code>/chat/completions</code>): NVIDIA, OpenCode Zen, OpenRouter, Groq e outros. A chave fica guardada no Supabase e só a função de borda a lê; esta tela mostra apenas os 4 últimos caracteres. A busca semântica e a leitura de imagens continuam no Gemini.</p>
+    <div id="cfg-gemini" class="tiles"></div>
+    <p id="cfg-chain" class="chain"></p>
+    <div id="prov-list" class="provs"></div>
+    <div class="bar add">
+      <span class="hint">Adicionar:</span>
+      <button class="btn btn-secondary" type="button" data-preset="nvidia">NVIDIA</button>
+      <button class="btn btn-secondary" type="button" data-preset="opencode">OpenCode Zen</button>
+      <button class="btn btn-secondary" type="button" data-preset="custom">Outro compatível com OpenAI</button>
+    </div>
   </section>
 </main>
 

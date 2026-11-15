@@ -6,6 +6,7 @@
 --   brain_documents / brain_chunks   acervo e trechos (vetor + índice de texto)
 --   brain_search()                   busca híbrida com fusão por posição (RRF)
 --   brain_queries / brain_eval       histórico e conjunto de avaliação
+--   brain_providers                  chaves e modelos de provedores extras (só a função lê)
 --   bucket privado `brain`           PDFs originais
 --   registro no portal (slug `brain`)
 --
@@ -184,6 +185,22 @@ CREATE POLICY "brain files insert" ON storage.objects FOR INSERT TO authenticate
 DROP POLICY IF EXISTS "brain files delete" ON storage.objects;
 CREATE POLICY "brain files delete" ON storage.objects FOR DELETE TO authenticated
   USING (bucket_id = 'brain' AND (SELECT public.wb_is_admin()));
+
+-- ---------- provedores extras de modelo (compatíveis com a API da OpenAI: NVIDIA, OpenCode Zen...) ----------
+-- A chave só é lida pela função de borda (service role). Sem policy: nenhum usuário lê esta tabela, nem o admin pelo navegador.
+-- shortcut: chave em texto na tabela (o disco do Supabase já é cifrado); migrar para o Supabase Vault se houver mais de um admin.
+CREATE TABLE IF NOT EXISTS public.brain_providers (
+  id         TEXT PRIMARY KEY CHECK (id ~ '^[a-z0-9-]{2,30}$'),
+  name       TEXT NOT NULL,
+  base_url   TEXT NOT NULL CHECK (base_url ~ '^https://'),
+  api_key    TEXT NOT NULL DEFAULT '',
+  model      TEXT NOT NULL,
+  slot       TEXT NOT NULL DEFAULT 'fallback' CHECK (slot IN ('first', 'fallback', 'off')),   -- antes do Gemini, depois dele, ou só quando escolhido
+  position   INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.brain_providers ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.brain_providers FROM anon, authenticated;
 
 -- ---------- registro no portal ----------
 INSERT INTO public.applications (slug, name, url, icon, category, description, keywords, status, is_active)

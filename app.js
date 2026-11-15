@@ -8,7 +8,7 @@
   const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
   const f0 = v => (+v || 0).toLocaleString('pt-BR');
 
-  const DEF = { expand: true, rerank: false, k: 8, w: 0.5, mode: 'hybrid' };
+  const DEF = { expand: true, rerank: false, k: 8, w: 0.5, mode: 'hybrid', model: '' };
   function loadOpts() {
     let s = {}; try { s = JSON.parse(localStorage.getItem(LS)) || {}; } catch (e) { s = {}; }
     const o = { ...DEF };
@@ -17,7 +17,7 @@
     o.w = Math.min(Math.max(o.w, 0), 1);
     return o;
   }
-  const S = { o: loadOpts(), docs: [], byId: {}, filter: null, admin: false, conv: [], turns: [], evals: [], busy: false };
+  const S = { o: loadOpts(), docs: [], byId: {}, filter: null, admin: false, conv: [], turns: [], evals: [], busy: false, me: null, provs: [] };
   const save = () => { try { localStorage.setItem(LS, JSON.stringify(S.o)); } catch (e) { /* sem armazenamento: segue sem lembrar */ } };
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 3500); }
   function banner(msg) { const b = $('#banner'); b.textContent = msg || ''; b.hidden = !msg; }
@@ -73,7 +73,7 @@
     bubble('user', esc(q));
     const b = bubble('bot pending', 'Buscando no acervo e escrevendo a resposta…');
     try {
-      const r = await api('ask', { q, history: S.conv.slice(-3), mode: 'hybrid', ...params() });
+      const r = await api('ask', { q, history: S.conv.slice(-3), mode: 'hybrid', provider: S.o.model, ...params() });
       const t = addTurn(q, r.answer, r.sources, r.lex);
       b.className = 'msg bot'; b.dataset.turn = t.i;
       b.innerHTML = t.html + '<p class="meta">' + r.sources.length + ' trechos · ' + (r.ms / 1000).toFixed(1).replace('.', ',') + ' s' + (r.model ? ' · ' + esc(r.model) : '') + (r.notice ? ' · ⚠ ' + esc(r.notice) : '') +
@@ -135,6 +135,7 @@
         '</td><td class="r">' + f0(d.blank_pages) + '</td><td><span class="badge ' + ST[d.status][0] + '">' + ST[d.status][1] + '</span></td><td class="actions">' +
         (d.storage_path ? '<button type="button" data-open="' + d.id + '" data-page="1">Abrir</button>' : '') + (S.admin ? '<button type="button" data-del="' + d.id + '">Excluir</button>' : '') + '</td></tr>').join('')
         : '<tr><td colspan="7">O acervo está vazio.</td></tr>') + '</tbody>';
+    labelCells($('#doc-table'));
     const cats = [...new Set(S.docs.map(d => d.category).filter(Boolean))].sort();
     $('#cats').innerHTML = cats.map(c => '<option value="' + esc(c) + '">').join('');
     $('#doc-checks').innerHTML = ready.map(d => '<label class="chk"><input type="checkbox" value="' + d.id + '"' + (!S.filter || S.filter.has(d.id) ? ' checked' : '') + '> ' + esc(d.title) + '</label>').join('');
@@ -232,6 +233,7 @@
           (pos ? '<td>' + cell(p && p.semantic) + '</td><td>' + cell(p && p.lexical) + '</td><td>' + cell(p && p.hybrid) + '</td>' : '') +
           (S.admin ? '<td class="actions"><button type="button" data-edel="' + e.id + '">Excluir</button></td>' : '') + '</tr>'; }).join('')
         : '<tr><td colspan="6">Nenhuma pergunta de avaliação ainda.</td></tr>') + '</tbody>';
+    labelCells($('#eval-table'));
   }
   async function runEval() {
     if (!S.evals.length) return toast('Adicione perguntas de avaliação primeiro.');
@@ -254,6 +256,114 @@
     drawEval(pos); btn.disabled = false;
   }
 
+  // ---------- modelos (admin): provedores extras compatíveis com a OpenAI ----------
+  const PRESETS = {
+    nvidia: { id: 'nvidia', name: 'NVIDIA', base_url: 'https://integrate.api.nvidia.com/v1', model: 'deepseek-ai/deepseek-v4-pro',
+      models: ['deepseek-ai/deepseek-v4-pro', 'z-ai/glm-5.3', 'qwen/qwen3-next-80b-a3b-instruct', 'openai/gpt-oss-120b'], help: 'https://build.nvidia.com/' },
+    // o Zen tem três APIs; só os modelos de /chat/completions servem aqui (os gratuitos só funcionam dentro do OpenCode)
+    opencode: { id: 'opencode', name: 'OpenCode Zen', base_url: 'https://opencode.ai/inference/openai/v1', model: 'deepseek-v4.1-flash',
+      models: ['deepseek-v4.1-flash', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'kimi-k2.6', 'minimax-m3', 'mistral-large-4', 'qwen3.8-max'], help: 'https://opencode.ai/docs/zen/' },
+    custom: { id: '', name: '', base_url: 'https://', model: '', models: [] },
+  };
+  const SLOT = { first: 'Antes do Gemini', fallback: 'Reserva, se o Gemini falhar', off: 'Só quando escolhido na pergunta' };
+  let pk = 0;
+  const preset = p => Object.values(PRESETS).find(x => x.base_url && x.base_url === p.base_url);
+  const field = (label, html, cls) => '<label class="fld' + (cls ? ' ' + cls : '') + '"><span>' + label + '</span>' + html + '</label>';
+  function provForm(p) {
+    const fresh = p._new, pre = preset(p) || {}, models = p.models || pre.models || [], dl = 'ml-' + p._k;
+    return '<form class="prov" data-k="' + p._k + '" novalidate><header><strong>' + esc(p.name || 'Novo provedor') + '</strong>' +
+      (fresh ? '<span class="badge wait">◌ não salvo</span>' : p.key_hint ? '<span class="badge on">● chave ' + esc(p.key_hint) + '</span>' : '<span class="badge off">✕ sem chave</span>') + '</header>' +
+      '<div class="grid">' +
+      field('Nome', '<input class="inp" name="name" required maxlength="60" value="' + esc(p.name) + '">', 'wide') +
+      field('Identificador', '<input class="inp" name="id" required pattern="[a-z0-9\\-]{2,30}" value="' + esc(p.id) + '"' + (fresh ? '' : ' readonly') + ' title="Letras minúsculas, números e hífen">', 'wide') +
+      field('URL base', '<input class="inp" name="base_url" type="url" required value="' + esc(p.base_url) + '" spellcheck="false">', 'wide') +
+      field('Chave de API', '<input class="inp" name="api_key" type="password" autocomplete="new-password" spellcheck="false" placeholder="' +
+        (p.key_hint ? 'Guardada (' + esc(p.key_hint) + '). Deixe vazio para manter' : 'Cole a chave') + '">', 'wide') +
+      field('Modelo', '<input class="inp" name="model" required list="' + dl + '" value="' + esc(p.model) + '" spellcheck="false"><datalist id="' + dl + '">' +
+        models.map(m => '<option value="' + esc(m) + '">').join('') + '</datalist>', 'wide') +
+      field('Uso', '<select class="inp" name="slot">' + Object.entries(SLOT).map(([k, t]) => '<option value="' + k + '"' + (p.slot === k ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>') +
+      field('Ordem', '<input class="inp" name="position" type="number" step="1" value="' + (+p.position || 0) + '">', 'small') +
+      '</div><div class="bar"><button class="btn btn-primary" type="submit">Salvar</button>' +
+      (fresh ? '<button class="btn btn-secondary" type="button" data-pact="cancel">Cancelar</button>'
+        : '<button class="btn btn-secondary" type="button" data-pact="test"' + (p.key_hint ? '' : ' disabled') + '>Testar</button>' +
+          '<button class="btn btn-secondary" type="button" data-pact="models">Listar modelos</button>' +
+          (p.key_hint ? '<button class="btn btn-secondary" type="button" data-pact="clear">Remover chave</button>' : '') +
+          '<button class="btn btn-secondary danger" type="button" data-pact="del">Excluir</button>') +
+      (pre.help ? '<a class="link" href="' + pre.help + '" target="_blank" rel="noopener">Onde gerar a chave ↗</a>' : '') +
+      '</div><p class="hint" role="status" data-status></p></form>';
+  }
+  const provByK = k => S.provs.find(p => String(p._k) === String(k));
+  function drawProviders() {
+    $('#prov-list').innerHTML = S.provs.length ? S.provs.map(provForm).join('') : '<p class="hint">Nenhum provedor extra. As respostas usam só o Gemini.</p>';
+    drawChain();
+  }
+  function redrawProvider(p, msg, bad) {
+    const f = $('.prov[data-k="' + p._k + '"]'); if (!f) return drawProviders();
+    f.outerHTML = provForm(p); if (msg) pstatus(p, msg, bad); drawChain();
+  }
+  function pstatus(p, msg, bad) { const s = $('.prov[data-k="' + p._k + '"] [data-status]'); if (s) { s.textContent = msg; s.classList.toggle('error', !!bad); } }
+  function drawChain() {
+    const m = (S.me && S.me.models) || {}, on = S.provs.filter(p => !p._new && p.key_hint).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+    const ext = s => on.filter(p => p.slot === s).map(p => esc(p.name + ' · ' + p.model));
+    const steps = [...ext('first'), ...(m.chain || ['Gemini']).map(x => esc(x)), ...ext('fallback')];
+    $('#cfg-chain').innerHTML = '<strong>Ordem automática da resposta:</strong> ' + steps.map(s => '<span class="step">' + s + '</span>').join('<span class="arrow">›</span>') +
+      (on.some(p => p.slot === 'off') ? '<br><small>Só quando escolhidos em Modelo: ' + on.filter(p => p.slot === 'off').map(p => esc(p.name)).join(', ') + '</small>' : '');
+    $('#cfg-gemini').innerHTML = [['Gemini', m.gemini_key == null ? '—' : m.gemini_key ? '● configurado' : '✕ sem chave', 'segredo GEMINI_API_KEY no Supabase'],
+      ['Resposta', m.gen || '—', 'reserva: ' + (m.chain || []).slice(1).join(', ')], ['Busca semântica', m.embed || '—', (m.dim || '') + ' dimensões · sempre Gemini']]
+      .map(([l, v, d]) => '<div class="tile"><small>' + l + '</small><strong class="txt">' + esc(v) + '</strong><em>' + esc(d) + '</em></div>').join('');
+    fillPicker(on.map(p => ({ id: p.id, name: p.name, model: p.model })));
+  }
+  async function loadProviders() {
+    // os ainda não salvos ficam: o admin pode ter clicado em Adicionar antes de a lista chegar
+    try { S.provs = [...(await api('providers_list', {})).providers.map(p => ({ ...p, _k: ++pk })), ...S.provs.filter(p => p._new)]; drawProviders(); }
+    catch (e) { banner('Não consegui ler os provedores: ' + e.message); }
+  }
+  function fillPicker(list) {
+    $('#model-pick').innerHTML = '<option value="">Automático</option><option value="gemini">Gemini</option>' +
+      list.map(p => '<option value="' + esc(p.id) + '">' + esc(p.name + ' · ' + p.model) + '</option>').join('');
+    if (S.o.model && !list.some(p => p.id === S.o.model) && S.o.model !== 'gemini') { S.o.model = ''; save(); }
+    $('#model-wrap').hidden = !list.length; $('#model-pick').value = S.o.model;
+  }
+  function addProvider(kind) {
+    const base = PRESETS[kind]; let id = base.id;
+    for (let n = 2; id && S.provs.some(p => p.id === id); n++) id = base.id + '-' + n;
+    const p = { ...base, id, slot: 'fallback', position: S.provs.length + 1, key_hint: '', _new: true, _k: ++pk };
+    S.provs.push(p);
+    if (S.provs.length === 1) drawProviders(); else $('#prov-list').insertAdjacentHTML('beforeend', provForm(p));
+    const f = $('.prov[data-k="' + p._k + '"]'); f.scrollIntoView({ block: 'center', behavior: 'smooth' }); $(kind === 'custom' ? '[name=name]' : '[name=api_key]', f).focus();
+  }
+  async function saveProvider(f) {
+    const p = provByK(f.dataset.k), v = Object.fromEntries(new FormData(f));
+    const bad = [...f.elements].find(el => el.willValidate && !el.checkValidity());
+    if (bad) { bad.reportValidity(); return; }
+    if (p._new && S.provs.some(x => x !== p && x.id === v.id)) return pstatus(p, 'Já existe um provedor com esse identificador.', true);
+    pstatus(p, 'Salvando…');
+    try {
+      const r = await api('provider_save', { ...v, position: +v.position || 0 });
+      Object.assign(p, r, { _new: false }); redrawProvider(p, '✓ Salvo' + (v.api_key ? ' com a chave nova.' : '.') + (r.key_hint ? '' : ' Falta a chave para usar.'));
+    } catch (e) { pstatus(p, 'Não salvei: ' + e.message, true); }
+  }
+  async function providerAction(btn) {
+    const f = btn.closest('.prov'), p = provByK(f.dataset.k), act = btn.dataset.pact;
+    if (act === 'cancel') { S.provs = S.provs.filter(x => x !== p); f.remove(); if (!S.provs.length) drawProviders(); else drawChain(); return; }
+    if (act === 'del' && !confirm('Excluir o provedor "' + p.name + '" e a chave guardada? Não dá para desfazer.')) return;
+    if (act === 'clear' && !confirm('Apagar a chave guardada de "' + p.name + '"? O provedor fica sem uso até receber outra.')) return;
+    btn.disabled = true; pstatus(p, { test: 'Perguntando ao modelo…', models: 'Buscando a lista de modelos…', del: 'Excluindo…', clear: 'Apagando a chave…' }[act]);
+    try {
+      if (act === 'test') { const r = await api('provider_test', { id: p.id }); pstatus(p, '✓ Respondeu em ' + (r.ms / 1000).toFixed(1).replace('.', ',') + ' s: "' + r.sample + '"'); }
+      else if (act === 'models') { const r = await api('provider_models', { id: p.id }); p.models = r.models; redrawProvider(p, r.models.length + ' modelos disponíveis. Escolha no campo Modelo e salve.'); }
+      else if (act === 'clear') { Object.assign(p, await api('provider_save', { ...p, clear_key: true })); redrawProvider(p, 'Chave apagada.'); }
+      else if (act === 'del') { await api('provider_delete', { id: p.id }); S.provs = S.provs.filter(x => x !== p); drawProviders(); toast('Provedor excluído.'); }
+    } catch (e) { pstatus(p, '✕ ' + e.message, true); }
+    btn.disabled = false;
+  }
+
+  // tabela vira lista de cartões no celular: cada célula leva o nome da coluna
+  function labelCells(t) {
+    const hs = $$('thead th', t).map(th => th.textContent);
+    $$('tbody tr', t).forEach(tr => [...tr.children].forEach((td, i) => { if (hs[i]) td.dataset.label = hs[i]; }));
+  }
+
   // ---------- interface ----------
   function ui() {
     $$('[data-o]').forEach(el => { if (el.type === 'checkbox') el.checked = S.o[el.dataset.o]; else el.value = S.o[el.dataset.o]; });
@@ -263,8 +373,9 @@
   function tab(t) {
     $$('#tabs [data-tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t));
     $$('.tab').forEach(s => { s.hidden = s.id !== 'tab-' + t; });
-    $('#opts').hidden = t === 'docs';
+    $('#opts').hidden = t === 'docs' || t === 'cfg'; $('#opts').dataset.tab = t;
     if (t === 'eval') loadEval();
+    if (t === 'cfg') loadProviders();
   }
 
   async function init() {
@@ -272,7 +383,7 @@
     $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) tab(b.dataset.tab); });
     document.addEventListener('input', e => {
       const el = e.target, k = el.dataset.o; if (!k) return;
-      S.o[k] = el.type === 'checkbox' ? el.checked : +el.value; save(); ui();
+      S.o[k] = el.type === 'checkbox' ? el.checked : typeof DEF[k] === 'string' ? el.value : +el.value; save(); ui();
     });
     $('#doc-checks').addEventListener('change', readFilter);
     $('#doc-all').addEventListener('click', () => { $$('#doc-checks input').forEach(c => { c.checked = true; }); readFilter(); });
@@ -318,10 +429,15 @@
     });
     $('#eval-run').addEventListener('click', runEval);
 
+    $('#prov-list').addEventListener('submit', e => { e.preventDefault(); saveProvider(e.target); });
+    $('#prov-list').addEventListener('click', e => { const b = e.target.closest('[data-pact]'); if (b) providerAction(b); });
+    $$('[data-preset]').forEach(b => b.addEventListener('click', () => addProvider(b.dataset.preset)));
+
     if (sb) sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') window.location.href = CONFIG.PORTAL_URL; });
     try {
       const me = await api('whoami', {});
-      S.admin = !!me.admin; $('#admin-up').hidden = !S.admin; $('#eval-form').hidden = !S.admin;
+      S.me = me; S.admin = !!me.admin; $('#admin-up').hidden = !S.admin; $('#eval-form').hidden = !S.admin; $('#tab-cfg-btn').hidden = !S.admin;
+      fillPicker(me.providers || []); ui();
     } catch (e) { banner(e.message); }
     await loadDocs();
   }
