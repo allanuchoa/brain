@@ -258,8 +258,9 @@
 
   // ---------- modelos (admin): provedores extras compatíveis com a OpenAI ----------
   const PRESETS = {
-    nvidia: { id: 'nvidia', name: 'NVIDIA', base_url: 'https://integrate.api.nvidia.com/v1', model: 'deepseek-ai/deepseek-v4-pro',
-      models: ['deepseek-ai/deepseek-v4-pro', 'z-ai/glm-5.3', 'qwen/qwen3-next-80b-a3b-instruct', 'openai/gpt-oss-120b'], help: 'https://build.nvidia.com/' },
+    // o catálogo da NVIDIA muda com frequência: o botão Listar modelos traz o atual
+    nvidia: { id: 'nvidia', name: 'NVIDIA', base_url: 'https://integrate.api.nvidia.com/v1', model: 'deepseek-ai/deepseek-v4.1-flash',
+      models: ['deepseek-ai/deepseek-v4.1-flash', 'moonshotai/kimi-k2.6', 'mistralai/mistral-large-4-1t-a52b', 'nvidia/nemotron-3-super-120b-a12b', 'z-ai/glm-5.3-flash'], help: 'https://build.nvidia.com/' },
     // o Zen tem três APIs; só os modelos de /chat/completions servem aqui (os gratuitos só funcionam dentro do OpenCode)
     opencode: { id: 'opencode', name: 'OpenCode Zen', base_url: 'https://opencode.ai/inference/openai/v1', model: 'deepseek-v4.1-flash',
       models: ['deepseek-v4.1-flash', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'kimi-k2.6', 'minimax-m3', 'mistral-large-4', 'qwen3.8-max'], help: 'https://opencode.ai/docs/zen/' },
@@ -279,8 +280,12 @@
       field('URL base', '<input class="inp" name="base_url" type="url" required value="' + esc(p.base_url) + '" spellcheck="false">', 'wide') +
       field('Chave de API', '<input class="inp" name="api_key" type="password" autocomplete="new-password" spellcheck="false" placeholder="' +
         (p.key_hint ? 'Guardada (' + esc(p.key_hint) + '). Deixe vazio para manter' : 'Cole a chave') + '">', 'wide') +
-      field('Modelo', '<input class="inp" name="model" required list="' + dl + '" value="' + esc(p.model) + '" spellcheck="false"><datalist id="' + dl + '">' +
-        models.map(m => '<option value="' + esc(m) + '">').join('') + '</datalist>', 'wide') +
+      // depois de "Listar modelos" vira <select>: o <datalist> filtra pelo texto do campo e, com um modelo já escrito, não mostra os outros
+      field('Modelo', p._listed
+        ? '<select class="inp" name="model">' + (p._listed.includes(p.model) ? '' : '<option value="' + esc(p.model) + '" selected>' + esc(p.model) + ' (atual, fora da lista)</option>') +
+          p._listed.map(m => '<option value="' + esc(m) + '"' + (m === p.model ? ' selected' : '') + '>' + esc(m) + '</option>').join('') + '</select>'
+        : '<input class="inp" name="model" required list="' + dl + '" value="' + esc(p.model) + '" spellcheck="false"><datalist id="' + dl + '">' +
+          models.map(m => '<option value="' + esc(m) + '">').join('') + '</datalist>', 'wide') +
       field('Uso', '<select class="inp" name="slot">' + Object.entries(SLOT).map(([k, t]) => '<option value="' + k + '"' + (p.slot === k ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>') +
       field('Ordem', '<input class="inp" name="position" type="number" step="1" value="' + (+p.position || 0) + '">', 'small') +
       '</div><div class="bar"><button class="btn btn-primary" type="submit">Salvar</button>' +
@@ -351,10 +356,10 @@
     btn.disabled = true; pstatus(p, { test: 'Perguntando ao modelo…', models: 'Buscando a lista de modelos…', del: 'Excluindo…', clear: 'Apagando a chave…' }[act]);
     try {
       if (act === 'test') { const r = await api('provider_test', { id: p.id }); pstatus(p, '✓ Respondeu em ' + (r.ms / 1000).toFixed(1).replace('.', ',') + ' s: "' + r.sample + '"'); }
-      else if (act === 'models') { const r = await api('provider_models', { id: p.id }); p.models = r.models; redrawProvider(p, r.models.length + ' modelos disponíveis. Escolha no campo Modelo e salve.'); }
+      else if (act === 'models') { const r = await api('provider_models', { id: p.id }); p._listed = r.models; redrawProvider(p, r.models.length + ' modelos disponíveis. Escolha no campo Modelo, salve e teste.'); }
       else if (act === 'clear') { Object.assign(p, await api('provider_save', { ...p, clear_key: true })); redrawProvider(p, 'Chave apagada.'); }
       else if (act === 'del') { await api('provider_delete', { id: p.id }); S.provs = S.provs.filter(x => x !== p); drawProviders(); toast('Provedor excluído.'); }
-    } catch (e) { pstatus(p, '✕ ' + e.message, true); }
+    } catch (e) { pstatus(p, '✕ ' + e.message + (act === 'test' && /model|modelo|40[04]|410/i.test(e.message) ? ' · Use Listar modelos e escolha outro.' : ''), true); }
     btn.disabled = false;
   }
 
