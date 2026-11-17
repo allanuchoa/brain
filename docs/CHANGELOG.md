@@ -1,5 +1,10 @@
 # Changelog - Allan's Brain
 
+## [2.2.0] - 2026-11-16
+### Adicionado
+- Indexação retomável: reenviar um arquivo interrompido continua de onde parou, se o texto extraído for o mesmo (`chunk_sig`). Antes recomeçava do zero e gastava a cota de novo. (Autor: Agente de IA Claude Opus 5.5)
+- Cota diária do Gemini esgotada não interrompe mais a indexação: o resto entra só com texto (já aparece na busca textual) e o documento fica pronto. O botão "Completar vetores", no Acervo, gera os vetores que faltam quando a cota volta. (Autor: Agente de IA Claude Opus 5.5)
+
 ## [2.1.0] - 2026-11-15
 ### Adicionado
 - Aba Modelos (só admin): provedores extras compatíveis com a API da OpenAI (NVIDIA, OpenCode Zen ou outro), com chave, modelo, uso (antes do Gemini, reserva ou só quando escolhido) e ordem. Botões para testar e listar modelos. A chave fica em `brain_providers`, lida só pela função; a tela mostra os 4 últimos caracteres. (Autor: Agente de IA Claude Opus 5.5)

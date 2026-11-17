@@ -1,7 +1,8 @@
 // Função de borda do Allan's Brain. Guarda a chave do Gemini (segredo GEMINI_API_KEY) e faz:
 //   search          busca híbrida, semântica ou textual (com expansão e reordenação opcionais)
 //   ask             busca + resposta com citações
-//   ingest_*        indexação de trechos (só admin)
+//   ingest_*        indexação de trechos, retomável; sem cota diária grava o texto sem vetor (só admin)
+//   embed_pending   completa os vetores que faltaram (só admin)
 //   describe        transcreve imagem ou página digitalizada (só admin)
 //   delete_doc      remove documento, trechos e arquivo (só admin)
 //   provider_*      chaves e modelos de provedores extras compatíveis com a OpenAI (só admin)
@@ -236,40 +237,86 @@ async function ask(b: any, db: SupabaseClient, save: boolean, provs: Prov[]) {
 }
 
 // ---------- indexação (admin) ----------
+const isDaily = (e: unknown) => e instanceof Fail && e.status === 429 && /diária/.test(e.message);
+// o vetor leva o título e a seção junto: um trecho solto perde o contexto de onde veio
+const vecText = (title: string, heading: string | null, content: string) => `Documento: ${title}\n${heading ? "Seção: " + heading + "\n" : ""}${content}`.slice(0, 8000);
+
 async function ingestStart(b: any, svc: SupabaseClient, uid: string | null) {
   const hash = String(b.content_hash ?? "");
   if (!/^[a-f0-9]{64}$/.test(hash)) throw new Fail(400, "Hash do arquivo ausente.");
-  const { data: old } = await svc.from("brain_documents").select("id, status").eq("content_hash", hash).maybeSingle();
+  const sig = /^[a-f0-9]{64}$/.test(String(b.chunk_sig ?? "")) ? String(b.chunk_sig) : null;
+  const { data: old } = await svc.from("brain_documents").select("id, status, chunk_sig").eq("content_hash", hash).maybeSingle();
   if (old?.status === "ready" && !b.replace) return { duplicate: true, id: old.id };
-  if (old) await svc.from("brain_documents").delete().eq("id", old.id);   // indexação anterior incompleta, ou troca pedida
+  // mesma extração de antes: retoma de onde parou em vez de gastar a cota de novo nos trechos que já estão gravados
+  if (old && old.status !== "ready" && sig && old.chunk_sig === sig) {
+    const existing: number[] = [];
+    for (let from = 0; ; from += 1000) {   // o PostgREST devolve no máximo 1000 linhas por vez
+      const { data, error } = await svc.from("brain_chunks").select("idx").eq("doc_id", old.id).order("idx").range(from, from + 999);
+      if (error) throw new Fail(500, "Não consegui ler os trechos já gravados: " + error.message);
+      existing.push(...(data ?? []).map((r: any) => r.idx));
+      if (!data || data.length < 1000) break;
+    }
+    await svc.from("brain_documents").update({ status: "indexing", storage_path: b.storage_path ?? null, category: b.category ? String(b.category).slice(0, 60) : null }).eq("id", old.id);
+    return { id: old.id, existing };
+  }
+  if (old) await svc.from("brain_documents").delete().eq("id", old.id);   // extração diferente, ou troca pedida
   const { data, error } = await svc.from("brain_documents").insert({
     title: String(b.title || b.file_name).slice(0, 200), file_name: String(b.file_name).slice(0, 300), storage_path: b.storage_path ?? null,
     mime: b.mime ?? null, category: b.category ? String(b.category).slice(0, 60) : null, pages: Number(b.pages) || 0,
-    blank_pages: Number(b.blank_pages) || 0, chars: Number(b.chars) || 0, content_hash: hash, created_by: uid,
+    blank_pages: Number(b.blank_pages) || 0, chars: Number(b.chars) || 0, content_hash: hash, created_by: uid, chunk_sig: sig,
   }).select("id").single();
   if (error) throw new Fail(500, "Não consegui registrar o documento: " + error.message);
-  return { id: data.id };
+  return { id: data.id, existing: [] };
 }
 async function ingestChunks(b: any, svc: SupabaseClient) {
   const chunks = (Array.isArray(b.chunks) ? b.chunks : []).filter((c: any) => c && typeof c.content === "string" && c.content.trim());
   if (!b.doc_id || !chunks.length || chunks.length > 64) throw new Fail(400, "Envie de 1 a 64 trechos por chamada.");
   const { data: doc } = await svc.from("brain_documents").select("title").eq("id", b.doc_id).maybeSingle();
   if (!doc) throw new Fail(404, "Documento não encontrado.");
-  // o vetor leva o título e a seção junto: um trecho solto perde o contexto de onde veio
-  const vecs = await embed(chunks.map((c: any) => `Documento: ${doc.title}\n${c.heading ? "Seção: " + c.heading + "\n" : ""}${c.content}`.slice(0, 8000)), "RETRIEVAL_DOCUMENT");
+  // cota diária esgotada: grava o texto sem vetor (já entra na busca textual); o vetor vem depois, por embed_pending
+  let vecs: (number[] | null)[] = chunks.map(() => null), notice = "";
+  if (!b.no_embed) {
+    try { vecs = await embed(chunks.map((c: any) => vecText(doc.title, c.heading, c.content)), "RETRIEVAL_DOCUMENT"); }
+    catch (e) { if (!isDaily(e)) throw e; notice = (e as Error).message; }
+  }
   const rows = chunks.map((c: any, i: number) => ({
     doc_id: b.doc_id, page: Number.isFinite(c.page) ? c.page : null, idx: Number(c.idx), heading: c.heading ? String(c.heading).slice(0, 200) : null,
-    content: String(c.content).slice(0, 6000), embedding: JSON.stringify(vecs[i]),
+    content: String(c.content).slice(0, 6000), embedding: vecs[i] ? JSON.stringify(vecs[i]) : null,
   }));
   const { error } = await svc.from("brain_chunks").upsert(rows, { onConflict: "doc_id,idx" });
   if (error) throw new Fail(500, "Não consegui gravar os trechos: " + error.message);
-  return { saved: rows.length };
+  return { saved: rows.length, pending: vecs.filter((v) => !v).length, notice };
+}
+async function countChunks(svc: SupabaseClient, docId: string) {
+  const [all, pend] = await Promise.all([
+    svc.from("brain_chunks").select("id", { count: "exact", head: true }).eq("doc_id", docId),
+    svc.from("brain_chunks").select("id", { count: "exact", head: true }).eq("doc_id", docId).is("embedding", null),
+  ]);
+  return { chunks: all.count ?? 0, pending: pend.count ?? 0 };
 }
 async function ingestFinish(b: any, svc: SupabaseClient) {
-  const { count } = await svc.from("brain_chunks").select("id", { count: "exact", head: true }).eq("doc_id", b.doc_id);
-  const { error } = await svc.from("brain_documents").update({ status: count ? "ready" : "error", chunks: count ?? 0 }).eq("id", b.doc_id);
+  const n = await countChunks(svc, b.doc_id);
+  const { error } = await svc.from("brain_documents").update({ status: n.chunks ? "ready" : "error", ...n }).eq("id", b.doc_id);
   if (error) throw new Fail(500, error.message);
-  return { chunks: count ?? 0 };
+  return n;
+}
+// completa os vetores que faltam, um lote por chamada; a interface repete até acabar ou a cota diária esgotar
+async function embedPending(b: any, svc: SupabaseClient) {
+  const left = async () => (await svc.from("brain_chunks").select("id", { count: "exact", head: true }).is("embedding", null)).count ?? 0;
+  const { data: rows, error } = await svc.from("brain_chunks").select("id, doc_id, heading, content").is("embedding", null)
+    .order("doc_id").order("idx").limit(Math.min(Math.max(Number(b.limit) || 48, 1), 100));
+  if (error) throw new Fail(500, error.message);
+  if (!rows?.length) return { done: 0, left: 0 };
+  const ids = [...new Set(rows.map((r: any) => r.doc_id as string))];
+  const { data: docs } = await svc.from("brain_documents").select("id, title").in("id", ids);
+  const title = new Map((docs ?? []).map((d: any) => [d.id, d.title]));
+  let vecs: number[][];
+  try { vecs = await embed(rows.map((r: any) => vecText(title.get(r.doc_id) ?? "", r.heading, r.content)), "RETRIEVAL_DOCUMENT"); }
+  catch (e) { if (isDaily(e)) return { done: 0, left: await left(), quota: (e as Error).message }; throw e; }
+  const res = await Promise.all(rows.map((r: any, i: number) => svc.from("brain_chunks").update({ embedding: JSON.stringify(vecs[i]) }).eq("id", r.id)));
+  const bad = res.find((r) => r.error); if (bad) throw new Fail(500, "Não consegui gravar os vetores: " + bad.error!.message);
+  await Promise.all(ids.map(async (id) => svc.from("brain_documents").update({ pending: (await countChunks(svc, id)).pending }).eq("id", id)));
+  return { done: rows.length, left: await left() };
 }
 async function deleteDoc(b: any, svc: SupabaseClient) {
   const { data: doc } = await svc.from("brain_documents").select("storage_path").eq("id", b.doc_id).maybeSingle();
@@ -365,6 +412,7 @@ Deno.serve(async (req) => {
       case "ingest_start": needAdmin(); out = await ingestStart(b, svc, uid); break;
       case "ingest_chunks": needAdmin(); out = await ingestChunks(b, svc); break;
       case "ingest_finish": needAdmin(); out = await ingestFinish(b, svc); break;
+      case "embed_pending": needAdmin(); out = await embedPending(b, svc); break;
       case "delete_doc": needAdmin(); out = await deleteDoc(b, svc); break;
       case "describe": needAdmin(); out = await describe(b); break;
       // quem usa o Brain vê nome e modelo dos provedores com chave, para escolher na pergunta; a chave não sai daqui

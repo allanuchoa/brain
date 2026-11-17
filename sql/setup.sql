@@ -73,6 +73,11 @@ CREATE INDEX IF NOT EXISTS brain_chunks_fts_idx ON public.brain_chunks USING gin
 CREATE INDEX IF NOT EXISTS brain_chunks_emb_idx ON public.brain_chunks USING hnsw (embedding extensions.vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS brain_chunks_doc_idx ON public.brain_chunks (doc_id, idx);
 
+-- indexação retomável: trecho sem vetor (cota do Gemini esgotada) já entra na busca textual e ganha o vetor depois
+ALTER TABLE public.brain_documents ADD COLUMN IF NOT EXISTS pending   INT NOT NULL DEFAULT 0;   -- trechos ainda sem vetor
+ALTER TABLE public.brain_documents ADD COLUMN IF NOT EXISTS chunk_sig TEXT;                     -- sha256 dos trechos: mesma extração = pode retomar
+CREATE INDEX IF NOT EXISTS brain_chunks_noemb_idx ON public.brain_chunks (doc_id, idx) WHERE embedding IS NULL;
+
 CREATE TABLE IF NOT EXISTS public.brain_queries (
   id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id    UUID NOT NULL DEFAULT auth.uid() REFERENCES public.profiles(id) ON DELETE CASCADE,

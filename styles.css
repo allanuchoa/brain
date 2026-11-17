@@ -261,6 +261,9 @@ mark { background: rgba(250,178,25,.28); color: var(--color-ink-strong); border-
 .prov .bar .link { margin-left: auto; }
 .btn.danger:hover { border-color: #d03b3b; color: #f87171; box-shadow: none; }
 .bar.add { padding-top: var(--spacing-sm); }
+.bar.pend { flex-wrap: nowrap; margin-bottom: var(--spacing-md); }
+.bar.pend .hint { flex: 1; min-width: 0; }
+@media (max-width: 640px) { .bar.pend { flex-wrap: wrap; } .bar.pend .btn { flex: 1 1 100%; } }
 
 /* ---------- responsivo ---------- */
 .tabs, .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }

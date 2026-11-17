@@ -35,6 +35,12 @@ Este arquivo registra só o que é específico daqui.
 - Título de seção (numerado, "Art. N", "CAPÍTULO", caixa alta) abre trecho novo e é guardado em `heading`.
 - Linha curta repetida no topo ou no pé de 40% das páginas é cabeçalho ou rodapé e sai.
 
+## Indexação e cota
+
+- `ingest_start` recebe `chunk_sig` (sha256 dos trechos). Documento incompleto com a mesma assinatura é retomado: a função devolve `existing` (idx já gravados) e a interface envia só o resto. Assinatura diferente apaga e recomeça.
+- Cota diária do Gemini esgotada em `ingest_chunks`: o trecho é gravado com `embedding` nulo e a interface manda o resto com `no_embed`. `brain_documents.pending` conta os trechos sem vetor; `embed_pending` os completa em lotes.
+- Trecho sem vetor só aparece na busca textual (`brain_search` ignora vetor nulo na semântica).
+
 ## Provedores extras
 
 - Tabela `brain_providers`, sem policy: só a função (service role) lê. A chave entra por `provider_save` e nunca volta ao navegador (só `key_hint`).

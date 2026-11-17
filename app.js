@@ -127,12 +127,15 @@
     if (error) { banner('Não consegui ler o acervo: ' + error.message); return; }
     S.docs = data || []; S.byId = {}; S.docs.forEach(d => { S.byId[d.id] = d; });
     const ready = S.docs.filter(d => d.status === 'ready'), sum = k => ready.reduce((s, d) => s + (d[k] || 0), 0);
-    $('#doc-stats').innerHTML = [['Documentos', ready.length], ['Páginas', sum('pages')], ['Trechos indexados', sum('chunks')], ['Páginas sem texto', sum('blank_pages')]]
+    const pend = S.docs.reduce((s, d) => s + (d.pending || 0), 0);
+    $('#pend-bar').hidden = !(S.admin && pend);
+    $('#doc-stats').innerHTML = [['Documentos', ready.length], ['Páginas', sum('pages')], ['Trechos indexados', sum('chunks')], ['Páginas sem texto', sum('blank_pages')], ...(pend ? [['Trechos sem vetor', pend]] : [])]
       .map(([l, v]) => '<div class="tile"><small>' + l + '</small><strong>' + f0(v) + '</strong></div>').join('');
     const ST = { ready: ['on', '● Pronto'], indexing: ['wait', '◌ Indexando'], error: ['off', '✕ Falhou'] };
     $('#doc-table').innerHTML = '<thead><tr><th>Documento</th><th>Categoria</th><th class="r">Páginas</th><th class="r">Trechos</th><th class="r">Sem texto</th><th>Situação</th><th>Ações</th></tr></thead><tbody>' +
       (S.docs.length ? S.docs.map(d => '<tr><td><strong>' + esc(d.title) + '</strong><br><small>' + esc(d.file_name) + '</small></td><td>' + esc(d.category || '') + '</td><td class="r">' + f0(d.pages) + '</td><td class="r">' + f0(d.chunks) +
-        '</td><td class="r">' + f0(d.blank_pages) + '</td><td><span class="badge ' + ST[d.status][0] + '">' + ST[d.status][1] + '</span></td><td class="actions">' +
+        '</td><td class="r">' + f0(d.blank_pages) + '</td><td><span class="badge ' + ST[d.status][0] + '">' + ST[d.status][1] + '</span>' +
+        (d.pending ? '<br><small title="Já aparecem na busca textual; a busca semântica ainda não os vê">' + f0(d.pending) + ' sem vetor</small>' : '') + '</td><td class="actions">' +
         (d.storage_path ? '<button type="button" data-open="' + d.id + '" data-page="1">Abrir</button>' : '') + (S.admin ? '<button type="button" data-del="' + d.id + '">Excluir</button>' : '') + '</td></tr>').join('')
         : '<tr><td colspan="7">O acervo está vazio.</td></tr>') + '</tbody>';
     labelCells($('#doc-table'));
@@ -165,7 +168,7 @@
   async function ingest(file, say) {
     if (file.size > 50 * 1024 * 1024) throw new Error('arquivo acima de 50 MB');
     const buf = await file.arrayBuffer(), ext = (file.name.split('.').pop() || '').toLowerCase(), ocr = $('#ocr').checked;
-    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
+    const hash = await sha256(buf);
     const pages = []; let blank = 0, mime = file.type || 'application/octet-stream';
     if (ext === 'pdf') {
       mime = 'application/pdf';
@@ -196,20 +199,48 @@
     const up = await sb.storage.from(BUCKET).upload(path, file, { upsert: false, contentType: mime });
     if (up.error && !/already exists|duplicate/i.test(up.error.message)) throw new Error('envio do arquivo: ' + up.error.message);
     const title = file.name.replace(/\.[^.]+$/, '').replace(/[_+]+/g, ' ').trim();
+    // assinatura dos trechos: se o texto extraído for o mesmo de uma tentativa interrompida, a função retoma de onde parou
+    const sig = await sha256(JSON.stringify(chunks.map(c => [c.page, c.heading, c.content])));
     const start = await api('ingest_start', { title, file_name: file.name, storage_path: path, mime, category: $('#up-cat').value.trim() || null,
-      pages: pages.length, blank_pages: blank, chars: pages.reduce((s, p) => s + p.text.length, 0), content_hash: hash });
+      pages: pages.length, blank_pages: blank, chars: pages.reduce((s, p) => s + p.text.length, 0), content_hash: hash, chunk_sig: sig });
     if (start.duplicate) return 'já estava no acervo';
-    for (let i = 0; i < chunks.length; i += 48) {
-      const label = 'indexando trechos ' + Math.min(i + 48, chunks.length) + ' de ' + chunks.length;
+    const have = new Set(start.existing || []), todo = chunks.filter(c => !have.has(c.idx));
+    let noEmbed = false, pending = 0;
+    for (let i = 0; i < todo.length; i += 48) {
+      const label = (have.size ? 'retomando (' + have.size + ' já gravados) · ' : '') + 'indexando trechos ' + (have.size + Math.min(i + 48, todo.length)) + ' de ' + chunks.length + (noEmbed ? ' sem vetor' : '');
       for (let t = 1; ; t++) {   // a cota de embeddings do Gemini é por minuto: espera e repete
         say(label);
-        try { await api('ingest_chunks', { doc_id: start.id, chunks: chunks.slice(i, i + 48) }); break; }
-        catch (e) { if (t >= 10 || /diária/.test(e.message) || !/Limite por minuto|Erro 5\d\d|demorou/.test(e.message)) throw e; say(label + ' (aguardando a cota do Gemini, 65 s)'); await new Promise(r => setTimeout(r, 65000)); }
+        try {
+          const r = await api('ingest_chunks', { doc_id: start.id, chunks: todo.slice(i, i + 48), no_embed: noEmbed });
+          pending += r.pending || 0; noEmbed = noEmbed || !!r.pending;   // cota diária acabou: o resto vai só com texto, sem gastar chamadas
+          break;
+        } catch (e) { if (t >= 10 || !/Limite por minuto|Erro 5\d\d|demorou/.test(e.message)) throw e; say(label + ' (aguardando a cota do Gemini, 65 s)'); await new Promise(r => setTimeout(r, 65000)); }
       }
-      await new Promise(r => setTimeout(r, 5000));
+      if (!noEmbed) await new Promise(r => setTimeout(r, 5000));
     }
     const fin = await api('ingest_finish', { doc_id: start.id });
-    return fin.chunks + ' trechos em ' + pages.length + ' página(s)';
+    return fin.chunks + ' trechos em ' + pages.length + ' página(s)' + (have.size ? ', retomado de onde parou' : '') +
+      (fin.pending ? ' · ' + f0(fin.pending) + ' sem vetor (cota diária do Gemini). Já aparecem na busca textual; complete os vetores em "Completar vetores" quando a cota voltar' : '');
+  }
+  const sha256 = async data => [...new Uint8Array(await crypto.subtle.digest('SHA-256', typeof data === 'string' ? new TextEncoder().encode(data) : data))].map(b => b.toString(16).padStart(2, '0')).join('');
+  async function completeVectors() {
+    const btn = $('#pend-go'), prog = t => { $('#pend-prog').textContent = t; };
+    btn.disabled = true; let total = 0;
+    for (let t = 1; ;) {
+      try {
+        prog('Completando vetores… ' + f0(total) + ' feitos');
+        const r = await api('embed_pending', {});
+        if (r.quota) { prog('Cota diária do Gemini esgotada. ' + f0(total) + ' vetores completados agora; faltam ' + f0(r.left) + '. Tente de novo amanhã.'); break; }
+        total += r.done; t = 1;
+        if (!r.left || !r.done) { prog('✓ ' + f0(total) + ' vetores completados. Nenhum trecho pendente.'); break; }
+        prog(f0(total) + ' vetores completados · faltam ' + f0(r.left));
+        await new Promise(res => setTimeout(res, 5000));
+      } catch (e) {
+        if (t++ < 10 && /Limite por minuto|Erro 5\d\d|demorou/.test(e.message)) { prog(f0(total) + ' feitos · aguardando a cota por minuto do Gemini, 65 s'); await new Promise(res => setTimeout(res, 65000)); continue; }
+        prog('✕ ' + e.message); break;
+      }
+    }
+    btn.disabled = false; loadDocs();
   }
   let queue = Promise.resolve();
   function addFiles(files) {
@@ -434,6 +465,7 @@
     });
     $('#eval-run').addEventListener('click', runEval);
 
+    $('#pend-go').addEventListener('click', completeVectors);
     $('#prov-list').addEventListener('submit', e => { e.preventDefault(); saveProvider(e.target); });
     $('#prov-list').addEventListener('click', e => { const b = e.target.closest('[data-pact]'); if (b) providerAction(b); });
     $$('[data-preset]').forEach(b => b.addEventListener('click', () => addProvider(b.dataset.preset)));
